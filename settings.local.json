@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \"C:\\\\Users\\\\carij\\\\OneDrive\\\\Área de Trabalho\\\\Game-Base\\\\.claude\")",
+      "Bash(where node.exe)",
+      "Bash(where deno.exe)",
+      "Bash(where bun.exe)",
+      "Bash(where php.exe)",
+      "Bash(where ruby.exe)",
+      "Bash(dir \"C:\\\\Program Files\\\\nodejs\\\\node.exe\")",
+      "Bash(dir \"C:\\\\Program Files \\(x86\\)\\\\nodejs\\\\node.exe\")",
+      "Bash(dir \"%APPDATA%\\\\npm\\\\node.exe\")",
+      "Bash(dir \"C:\\\\Users\\\\carij\\\\AppData\\\\Roaming\\\\npm\\\\npx.cmd\")",
+      "Bash(dir \"C:\\\\Program Files\\\\nodejs\\\\\" 2>nul & dir \"C:\\\\Users\\\\carij\\\\AppData\\\\Local\\\\Programs\\\\\")",
+      "PowerShell($env:PATH -split ';' | Where-Object { $_ -ne '' })",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(Select-String -Path \"C:\\\\Users\\\\carij\\\\OneDrive\\\\Área de Trabalho\\\\Game-Base\\\\index.html\" -Pattern \"drawCharacter|drawBrett|nftFlash\")",
+      "Bash(Select-Object LineNumber, Line)"
+    ]
+  }
+}
