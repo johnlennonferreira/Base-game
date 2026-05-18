@@ -27,7 +27,23 @@
 <button id="mute">🔊 SOM</button>
 <script>
 const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d');
+// roundRect polyfill for older browsers
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r) {
+    var rr = Math.min(r, w/2, h/2);
+    this.moveTo(x+rr, y);
+    this.lineTo(x+w-rr, y);
+    this.arcTo(x+w,y, x+w,y+rr, rr);
+    this.lineTo(x+w, y+h-rr);
+    this.arcTo(x+w,y+h, x+w-rr,y+h, rr);
+    this.lineTo(x+rr, y+h);
+    this.arcTo(x,y+h, x,y+h-rr, rr);
+    this.lineTo(x, y+rr);
+    this.arcTo(x,y, x+rr,y, rr);
+    this.closePath();
+  };
+}
+const ctx = canvas.getContext('2d', {alpha: false});
 const W = canvas.width, H = canvas.height;
 
 // ─── AUDIO ───────────────────────────────────
@@ -35,6 +51,7 @@ var _ac = null, muted = false;
 document.getElementById('mute').onclick = function() {
   muted = !muted;
   document.getElementById('mute').textContent = muted ? '🔇 MUDO' : '🔊 SOM';
+  if(muted) stopMusic(); else if(gameState==='playing') startMusic(getPhaseIdx());
 };
 function getAC() {
   if (!_ac) { try { _ac = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){} }
@@ -108,6 +125,471 @@ const PHASE_VISUALS = [
 ];
 function getPhaseVisual() { return PHASE_VISUALS[getPhaseIdx()]; }
 
+// ─── PHASE MUSIC ────────────────────────────────────────────
+const PHASE_MUSIC = [
+  { n:[110,0,138,165,138,110,0,0, 146,138,165,110,0,138,0,0],  d:120, w:'square',   v:.05  },
+  { n:[523,659,784,659,523,0,392,523, 659,784,659,523,440,523,0,0], d:110, w:'sine', v:.055 },
+  { n:[349,440,523,440,349,0,294,349, 440,523,698,523,440,349,0,0], d:155, w:'sine', v:.05  },
+  { n:[220,0,261,329,261,220,0,196, 0,247,294,247,220,0,196,0], d:195, w:'triangle',v:.055 },
+  { n:[262,330,392,523,392,330,262,0, 220,277,330,440,392,330,0,262], d:155, w:'sine', v:.06 },
+  { n:[110,0,130,0,146,130,110,0, 98,0,116,130,116,98,0,0],   d:190, w:'sawtooth', v:.04  },
+  { n:[440,0,554,659,0,880,659,554, 440,0,659,880,0,659,554,0], d:95, w:'square',   v:.045 },
+  { n:[294,330,370,440,370,330,294,0, 247,294,330,370,330,294,0,0], d:175, w:'sine', v:.055 },
+  { n:[185,0,207,246,220,185,0,174, 0,207,0,185,174,0,185,0], d:215, w:'sine',     v:.045 },
+  { n:[523,659,784,880,1047,880,784,659, 523,0,659,784,880,1047,880,0], d:105, w:'sine', v:.06 }
+];
+function startMusic(pi) {
+  if (_mPhase === pi) return;
+  stopMusic(); _mPhase = pi; _mPos = 0; _tickMusic();
+}
+function stopMusic() { clearTimeout(_mTimeout); _mTimeout = null; _mPhase = -1; }
+function _tickMusic() {
+  if (_mPhase < 0 || muted) return;
+  var pm = PHASE_MUSIC[_mPhase], f = pm.n[_mPos % pm.n.length];
+  if (f > 0) {
+    var a = getAC();
+    if (a) try {
+      var o = a.createOscillator(), g = a.createGain();
+      o.connect(g); g.connect(a.destination);
+      o.type = pm.w; o.frequency.value = f;
+      g.gain.setValueAtTime(pm.v, a.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, a.currentTime + pm.d/1000*.8);
+      o.start(a.currentTime); o.stop(a.currentTime + pm.d/1000);
+    } catch(e) {}
+  }
+  _mPos++;
+  _mTimeout = setTimeout(_tickMusic, pm.d);
+}
+
+// ─── AWARD / CHEST ──────────────────────────────────────────
+function chestCoinsRand() {
+  return Math.floor(10 + 90 * Math.pow(Math.random(), 1.8));
+}
+function drawTreasureChest(cx, cy, opened, openAnim) {
+  ctx.save(); ctx.translate(cx, cy);
+  var bw=90, bh=52, lidH=26;
+  ctx.globalAlpha=.3; ctx.fillStyle='#000';
+  ctx.beginPath(); ctx.ellipse(2,bh+7,bw/2-4,9,0,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha=1;
+  var bg=ctx.createLinearGradient(0,0,0,bh);
+  bg.addColorStop(0,'#8B5A2B'); bg.addColorStop(1,'#4a2c10');
+  ctx.fillStyle=bg; ctx.strokeStyle='#2a1a08'; ctx.lineWidth=2;
+  ctx.fillRect(-bw/2,0,bw,bh); ctx.strokeRect(-bw/2,0,bw,bh);
+  ctx.strokeStyle='#3a2010'; ctx.lineWidth=1;
+  [-1,0,1].forEach(function(xi){ ctx.beginPath(); ctx.moveTo(xi*bw/3,0); ctx.lineTo(xi*bw/3,bh); ctx.stroke(); });
+  ctx.fillStyle='#C8960C'; ctx.fillRect(-bw/2,bh*.43,bw,6);
+  ctx.save();
+  ctx.translate(-bw/2, 0);
+  ctx.rotate(opened ? -Math.PI*.78*Math.min(1,openAnim/14) : 0);
+  var lg=ctx.createLinearGradient(0,-lidH,0,0);
+  lg.addColorStop(0,'#a06030'); lg.addColorStop(1,'#7a4a20');
+  ctx.fillStyle=lg; ctx.strokeStyle='#2a1a08'; ctx.lineWidth=2;
+  ctx.fillRect(0,-lidH,bw,lidH); ctx.strokeRect(0,-lidH,bw,lidH);
+  ctx.fillStyle='#b07030';
+  ctx.beginPath(); ctx.ellipse(bw/2,-lidH,bw/2,10,0,Math.PI,0); ctx.fill();
+  ctx.strokeStyle='#2a1a08'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.ellipse(bw/2,-lidH,bw/2,10,0,Math.PI,0); ctx.stroke();
+  ctx.fillStyle='#C8960C'; ctx.fillRect(0,-lidH*.55,bw,5);
+  ctx.restore();
+  if (opened && openAnim>3) {
+    var gp=Math.min(1,(openAnim-3)/8);
+    ctx.globalAlpha=gp*.7;
+    var ig=ctx.createRadialGradient(0,bh*.4,2,0,bh*.4,bw*.5);
+    ig.addColorStop(0,'#FFE040'); ig.addColorStop(1,'rgba(255,200,0,0)');
+    ctx.fillStyle=ig; ctx.fillRect(-bw/2+3,3,bw-6,bh-6);
+    ctx.globalAlpha=1;
+    if (openAnim>7) {
+      var nc=Math.min(openAnim-7,8);
+      for (var ci=0;ci<nc;ci++) {
+        var ca=(ci/8)*Math.PI*1.6+.2;
+        ctx.beginPath(); ctx.arc(Math.cos(ca-Math.PI/2)*22,bh*.4+Math.sin(ca)*12,5,0,Math.PI*2);
+        ctx.fillStyle='#FFD700'; ctx.shadowColor='#FFD700'; ctx.shadowBlur=10; ctx.fill();
+      }
+      ctx.shadowBlur=0;
+    }
+  }
+  var la=(opened&&openAnim>3)?Math.max(0,1-(openAnim-3)/4):1;
+  if (la>0) {
+    ctx.globalAlpha=la;
+    ctx.fillStyle='#C8960C'; ctx.strokeStyle='#7a5a00'; ctx.lineWidth=1.5;
+    ctx.fillRect(-11,bh*.4-10,22,18); ctx.strokeRect(-11,bh*.4-10,22,18);
+    ctx.fillStyle='#4a2c10';
+    ctx.beginPath(); ctx.arc(0,bh*.4-4,4,0,Math.PI*2); ctx.fill();
+    ctx.fillRect(-2.5,bh*.4-4,5,8);
+    ctx.globalAlpha=1;
+  }
+  ctx.strokeStyle='#C8960C'; ctx.lineWidth=2.5;
+  ctx.strokeRect(-bw/2+1,1,bw-2,bh-2);
+  ctx.restore();
+}
+function drawAwardScreen() {
+  ctx.fillStyle='rgba(0,5,20,.84)'; ctx.fillRect(0,0,W,H);
+  var cx=W/2, cy=H/2+10;
+  ctx.textAlign='center';
+  ctx.font='bold 17px Courier New';
+  var tg=ctx.createLinearGradient(cx-80,0,cx+80,0);
+  tg.addColorStop(0,'#FFD700'); tg.addColorStop(1,'#00D4FF');
+  ctx.fillStyle=tg; ctx.shadowColor='#FFD700'; ctx.shadowBlur=18;
+  var aTitle=chestType==='rare'?'⭐ FASE ÉPICA COMPLETA! ⭐':'PHASE '+(completedPhase+1)+' COMPLETE!';
+  ctx.fillText(aTitle, cx, cy-140);
+  ctx.shadowBlur=0;
+  var bOff=chestBounce>0?-Math.abs(Math.sin(chestBounce/12*Math.PI))*22:0;
+  if(chestBounce>0) chestBounce--;
+  drawTreasureChest(cx, cy-28+bOff, chestOpened, chestOpenAnim);
+  if(chestOpened && chestOpenAnim<20) chestOpenAnim++;
+  if (!chestOpened) {
+    for(var di=0;di<3;di++) {
+      ctx.beginPath(); ctx.arc(cx-20+di*20,cy+48,5,0,Math.PI*2);
+      ctx.fillStyle=di<chestClicks?'#FFD700':'#ffffff22';
+      ctx.shadowColor=di<chestClicks?'#FFD700':'transparent'; ctx.shadowBlur=8;
+      ctx.fill(); ctx.shadowBlur=0;
+    }
+    ctx.font='12px Courier New'; ctx.fillStyle='#ffffff66';
+    ctx.fillText('clique o baú para abrir', cx, cy+68);
+  }
+  if (chestOpened && chestOpenAnim>=14) {
+    ctx.font='bold 30px Courier New'; ctx.fillStyle='#FFD700';
+    ctx.shadowColor='#FFD700'; ctx.shadowBlur=24;
+    ctx.fillText('+'+chestCoins, cx, cy+60);
+    ctx.shadowBlur=0;
+    ctx.font='13px Courier New'; ctx.fillStyle='#88ccff';
+    ctx.fillText('moedas do dragão 🐉', cx, cy+82);
+    ctx.font='11px Courier New'; ctx.fillStyle='#ffffff55';
+    ctx.fillText('toque para continuar', cx, cy+108);
+  }
+}
+
+// ─── IDLE TABS ───────────────────────────────────────────────
+function drawIdleTabs() {
+  var labels=['JOGAR','LOJA','SKINS','RANK'], keys=['play','shop','skins','leaderboard'];
+  var tw=70, th=26, gap=6, total=labels.length*(tw+gap)-gap;
+  var tx0=W/2-total/2, ty=H-72;
+  ctx.font='bold 9px Courier New'; ctx.textAlign='center';
+  for(var ti=0;ti<labels.length;ti++) {
+    var tx=tx0+ti*(tw+gap), act=idleTab===keys[ti];
+    ctx.fillStyle=act?'#0052FF':'#0052FF1a';
+    ctx.strokeStyle=act?'#0052FF':'#0052FF55'; ctx.lineWidth=1.5;
+    ctx.fillRect(tx,ty,tw,th); ctx.strokeRect(tx,ty,tw,th);
+    ctx.fillStyle=act?'#fff':'#0052FF88';
+    ctx.shadowColor=act?'#00D4FF':'transparent'; ctx.shadowBlur=act?8:0;
+    ctx.fillText(labels[ti],tx+tw/2,ty+17); ctx.shadowBlur=0;
+  }
+}
+function drawShopCards(yStart, compact) {
+  var cols=3, tw=76, th=compact?82:80, gapX=8, gapY=compact?4:5;
+  var startX=W/2-((cols*(tw+gapX)-gapX)/2);
+  for(var si=1;si<SKINS.length;si++){
+    var idx2=si-1, col=idx2%cols, row=Math.floor(idx2/cols);
+    var sx=startX+col*(tw+gapX)+tw/2, sy=yStart+row*(th+gapY);
+    var sk=SKINS[si], owned=unlockedSkins.indexOf(si)>=0, equipped=activeSkin===si&&owned;
+    var canBuy=!owned&&coinCount>=sk.price;
+    // card bg
+    ctx.fillStyle=equipped?sk.body+'44':owned?sk.body+'1a':'#ffffff08';
+    ctx.strokeStyle=equipped?sk.body:owned?sk.body+'66':canBuy?sk.glow+'66':'#ffffff18';
+    ctx.lineWidth=equipped?2:1;
+    ctx.beginPath(); ctx.roundRect(sx-tw/2,sy,tw,th,6); ctx.fill(); ctx.stroke();
+    // character preview
+    var prevSkin=activeSkin; activeSkin=si;
+    ctx.save(); ctx.translate(sx,sy+(compact?28:28)); ctx.scale(.44,.44);
+    drawBleu(0,0,frame*.28,0); ctx.restore(); activeSkin=prevSkin;
+    // name
+    ctx.textAlign='center'; ctx.font='bold 8px Courier New';
+    ctx.fillStyle=owned?'#fff':'#ffffffaa'; ctx.fillText(sk.name,sx,sy+th-18);
+    // buy/equip button
+    var btnY=sy+th-12;
+    if(owned){
+      ctx.fillStyle=equipped?sk.body+'33':'#ffffff0a';
+      ctx.strokeStyle=equipped?sk.body:'#ffffff22'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.roundRect(sx-tw/2+4,btnY,tw-8,10,3); ctx.fill(); ctx.stroke();
+      ctx.font='6px Courier New'; ctx.fillStyle=equipped?sk.body:'#ffffff66';
+      ctx.fillText(equipped?'✓ EQUIPADA':'EQUIPAR',sx,btnY+7);
+    } else {
+      ctx.fillStyle=canBuy?'#FFD70020':'#ff000018';
+      ctx.strokeStyle=canBuy?'#FFD700':'#ff4444'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.roundRect(sx-tw/2+4,btnY,tw-8,10,3); ctx.fill(); ctx.stroke();
+      ctx.font='6px Courier New'; ctx.fillStyle=canBuy?'#FFD700':'#ff6666';
+      ctx.fillText('🐉 '+sk.price,sx,btnY+7);
+    }
+  }
+}
+function drawShopTab() {
+  ctx.textAlign='center';
+  // Header
+  ctx.font='bold 15px Courier New'; ctx.fillStyle='#FFD700';
+  ctx.shadowColor='#FFD700'; ctx.shadowBlur=10;
+  ctx.fillText('LOJA', W/2, 36); ctx.shadowBlur=0;
+  ctx.font='11px Courier New'; ctx.fillStyle='#FFD700';
+  ctx.fillText('🐉 '+coinCount+' moedas', W/2, 54);
+
+  // ── SKINS section ──
+  ctx.textAlign='left';
+  ctx.font='bold 8px Courier New'; ctx.fillStyle='#00D4FFaa';
+  ctx.fillText('💎 SKINS — compra com moedas do dragão', 16, 70);
+  ctx.textAlign='center';
+  drawShopCards(76, false);
+
+  // ── POÇÕES section (below 4 rows of skins = 76 + 4*82 = 404) ──
+  var py = 410;
+  ctx.textAlign='left';
+  ctx.font='bold 8px Courier New'; ctx.fillStyle='#aa44ffaa';
+  ctx.fillText('⚗️ POÇÕES', 16, py);
+  var potions=[{icon:'💊',name:'Vida Extra',sub:'em breve'},{icon:'⚡',name:'Speed+',sub:'em breve'},{icon:'🛡️',name:'Shield',sub:'em breve'}];
+  for(var pi2=0;pi2<3;pi2++){
+    var px2=16+pi2*126, py2=py+5;
+    ctx.fillStyle='#ffffff04'; ctx.strokeStyle='#aa44ff22'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.roundRect(px2,py2,118,38,5); ctx.fill(); ctx.stroke();
+    ctx.font='14px Courier New'; ctx.textAlign='center'; ctx.fillStyle='#ffffff22';
+    ctx.fillText(potions[pi2].icon, px2+18, py2+23);
+    ctx.font='7px Courier New'; ctx.fillStyle='#ffffff44';
+    ctx.fillText(potions[pi2].name, px2+66, py2+14);
+    ctx.font='bold 7px Courier New'; ctx.fillStyle='#aa44ff55';
+    ctx.fillText('EM BREVE', px2+66, py2+28);
+  }
+
+  // ── ITENS ESPECIAIS ──
+  var iy = py+52;
+  ctx.textAlign='left';
+  ctx.font='bold 8px Courier New'; ctx.fillStyle='#FFD700aa';
+  ctx.fillText('🗡️ ITENS ESPECIAIS', 16, iy);
+  var items2=[{icon:'🧲',name:'Moeda x2',sub:'em breve'},{icon:'💫',name:'Auto-Flip',sub:'em breve'},{icon:'🎯',name:'Aim+',sub:'em breve'}];
+  for(var ii3=0;ii3<3;ii3++){
+    var ix2=16+ii3*126, iy2=iy+5;
+    ctx.fillStyle='#ffffff04'; ctx.strokeStyle='#FFD70022'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.roundRect(ix2,iy2,118,38,5); ctx.fill(); ctx.stroke();
+    ctx.font='14px Courier New'; ctx.textAlign='center'; ctx.fillStyle='#ffffff22';
+    ctx.fillText(items2[ii3].icon, ix2+18, iy2+23);
+    ctx.font='7px Courier New'; ctx.fillStyle='#ffffff44';
+    ctx.fillText(items2[ii3].name, ix2+66, iy2+14);
+    ctx.font='bold 7px Courier New'; ctx.fillStyle='#FFD70044';
+    ctx.fillText('EM BREVE', ix2+66, iy2+28);
+  }
+  ctx.textAlign='center';
+}
+function drawShopOverlay() {
+  ctx.fillStyle='rgba(0,5,20,.92)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.font='bold 14px Courier New';
+  var sg=ctx.createLinearGradient(W/2-70,0,W/2+70,0);
+  sg.addColorStop(0,'#FFD700'); sg.addColorStop(1,'#00D4FF');
+  ctx.fillStyle=sg; ctx.shadowColor='#FFD700'; ctx.shadowBlur=14;
+  ctx.fillText('LOJA — FASE '+(completedPhase+1)+' COMPLETA', W/2, 36); ctx.shadowBlur=0;
+  ctx.font='11px Courier New'; ctx.fillStyle='#FFD700';
+  ctx.fillText('🐉 '+coinCount+' moedas disponíveis', W/2, 56);
+  ctx.font='bold 8px Courier New'; ctx.fillStyle='#00D4FFaa';
+  ctx.textAlign='left'; ctx.fillText('💎 SKINS — compra com moedas', 16, 72); ctx.textAlign='center';
+  drawShopCards(76, true);
+  // future items row placeholder
+  ctx.fillStyle='#ffffff06'; ctx.strokeStyle='#ffffff11'; ctx.lineWidth=1;
+  ctx.fillRect(W/2-118,H-118,236,32); ctx.strokeRect(W/2-118,H-118,236,32);
+  ctx.font='9px Courier New'; ctx.fillStyle='#ffffff33';
+  ctx.fillText('⚗️ poções  •  🗡️ power-ups  •  🃏 itens  — em breve', W/2, H-99);
+  // continue button
+  ctx.fillStyle='#0052FF'; ctx.strokeStyle='#00D4FF'; ctx.lineWidth=2;
+  ctx.fillRect(W/2-80,H-74,160,36); ctx.strokeRect(W/2-80,H-74,160,36);
+  ctx.font='bold 12px Courier New'; ctx.fillStyle='#fff';
+  ctx.shadowColor='#00D4FF'; ctx.shadowBlur=8;
+  ctx.fillText('CONTINUAR JOGANDO', W/2, H-50); ctx.shadowBlur=0;
+}
+function drawSkinsTab() {
+  ctx.textAlign='center';
+  // Title
+  ctx.font='bold 13px Courier New'; ctx.fillStyle='#00D4FF';
+  ctx.shadowColor='#00D4FF'; ctx.shadowBlur=10;
+  ctx.fillText('MINHAS SKINS', W/2, H/2-134); ctx.shadowBlur=0;
+  ctx.font='10px Courier New'; ctx.fillStyle='#FFD700';
+  ctx.fillText('🐉 '+coinCount+' moedas', W/2, H/2-116);
+
+  // Filter: only show skins the player owns
+  var owned = unlockedSkins.slice().sort(function(a,b){return a-b;});
+  if(owned.length===0){ owned=[0]; }
+
+  var cols=3, tw2=78, th2=92, gapX=8, gapY=6;
+  var totalW2=cols*(tw2+gapX)-gapX, startX=W/2-totalW2/2;
+  for(var ii=0;ii<owned.length;ii++){
+    var si=owned[ii];
+    var col=ii%cols, row=Math.floor(ii/cols);
+    var sx2=startX+col*(tw2+gapX)+tw2/2, sy2=H/2-100+row*(th2+gapY);
+    var equipped=activeSkin===si;
+    var sk2=SKINS[si];
+    // card bg
+    ctx.fillStyle=equipped?sk2.body+'44':'#ffffff0a';
+    ctx.strokeStyle=equipped?sk2.body:sk2.body+'55';
+    ctx.lineWidth=equipped?2:1;
+    ctx.beginPath(); ctx.roundRect(sx2-tw2/2,sy2,tw2,th2,6); ctx.fill(); ctx.stroke();
+    // character preview
+    var prevSkin=activeSkin; activeSkin=si;
+    ctx.save(); ctx.translate(sx2,sy2+38); ctx.scale(.52,.52);
+    drawBleu(0,0,frame*.28,0);
+    ctx.restore(); activeSkin=prevSkin;
+    // name
+    ctx.font='bold 8px Courier New'; ctx.fillStyle='#fff'; ctx.textAlign='center';
+    ctx.fillText(sk2.name, sx2, sy2+th2-18);
+    ctx.font='7px Courier New'; ctx.fillStyle='#ffffff55';
+    ctx.fillText(sk2.rarity||'PADRÃO', sx2, sy2+th2-8);
+    // equipped badge
+    if(equipped){
+      ctx.fillStyle=sk2.body; ctx.font='bold 7px Courier New';
+      ctx.fillText('✓ USO', sx2, sy2+10);
+    }
+  }
+
+  // Empty state
+  if(owned.length<=1){
+    ctx.font='9px Courier New'; ctx.fillStyle='#ffffff33';
+    ctx.fillText('compre mais skins na Loja 🛒', W/2, H/2+100);
+  } else {
+    ctx.font='9px Courier New'; ctx.fillStyle='#ffffff33';
+    ctx.fillText('toque na skin para equipar', W/2, H/2+100);
+  }
+}
+
+
+
+// ─── SKINS ────────────────────────────────────────────────────────────
+const SKINS = [
+  // 0 – padrão (grátis)
+  { name:'PADRÃO',    rarity:'COMUM', price:0,   body:'#3b8fff', bodyLt:'#6ab4ff', shadow:'#1a5fcc', belly:'#d6eeff', outline:'#1a4fa0', glow:'#4499ff' },
+  // 1-5 skins originais
+  { name:'NEON',      rarity:'COMUM', price:80,  body:'#00e5ff', bodyLt:'#88f8ff', shadow:'#007a99', belly:'#ccfeff', outline:'#005577', glow:'#00e5ff' },
+  { name:'DOURADO',   rarity:'COMUM', price:180, body:'#FFD700', bodyLt:'#FFE866', shadow:'#B8860B', belly:'#FFF5CC', outline:'#8B6914', glow:'#FFD700' },
+  { name:'CYBERPUNK', rarity:'COMUM', price:200, body:'#ff0080', bodyLt:'#ff66bb', shadow:'#880040', belly:'#ffccee', outline:'#660030', glow:'#ff00ff' },
+  { name:'MEME',      rarity:'COMUM', price:80,  body:'#ff6600', bodyLt:'#ff9944', shadow:'#cc4400', belly:'#ffddcc', outline:'#882200', glow:'#ff8800' },
+  { name:'BASE',      rarity:'COMUM', price:250, body:'#0052FF', bodyLt:'#4488ff', shadow:'#002299', belly:'#cce0ff', outline:'#001a99', glow:'#0052FF' },
+  // 6-10 novas skins
+  { name:'ROXO',      rarity:'COMUM', price:80,  body:'#9933ff', bodyLt:'#cc88ff', shadow:'#5500cc', belly:'#eeccff', outline:'#3d0099', glow:'#aa44ff' },
+  { name:'VERDE',     rarity:'COMUM', price:80,  body:'#00cc44', bodyLt:'#44ff88', shadow:'#006622', belly:'#ccffdd', outline:'#004d1a', glow:'#00dd55' },
+  { name:'VERMELHO',  rarity:'COMUM', price:100, body:'#ff2233', bodyLt:'#ff7788', shadow:'#aa0011', belly:'#ffcccc', outline:'#880011', glow:'#ff3344' },
+  { name:'ROSA',      rarity:'COMUM', price:100, body:'#ff66cc', bodyLt:'#ffaaee', shadow:'#cc2299', belly:'#ffddff', outline:'#990077', glow:'#ff44cc' },
+  { name:'PRETO',     rarity:'COMUM', price:150, body:'#222233', bodyLt:'#444466', shadow:'#111122', belly:'#aaaacc', outline:'#000011', glow:'#5555aa' }
+];
+
+// ─── LEADERBOARD TAB ────────────────────────────────────────────────
+function drawLeaderboardTab() {
+  ctx.textAlign='center';
+  ctx.font='bold 15px Courier New';
+  var rg=ctx.createLinearGradient(W/2-70,0,W/2+70,0);
+  rg.addColorStop(0,'#FFD700'); rg.addColorStop(1,'#00D4FF');
+  ctx.fillStyle=rg; ctx.shadowColor='#FFD700'; ctx.shadowBlur=14;
+  ctx.fillText('RANKING', W/2, H/2-122); ctx.shadowBlur=0;
+
+  var rows=[
+    { label:'PONTUAÇÃO ANTERIOR', val:lastScore,  color:'#00D4FF', icon:'🎮' },
+    { label:'MELHOR SCORE',    val:highScore,  color:'#FFD700', icon:'🏆' },
+    { label:'SCORE TOTAL',     val:totalScore, color:'#aa44ff', icon:'📊' }
+  ];
+  for(var ri=0;ri<rows.length;ri++){
+    var ry=H/2-82+ri*58;
+    ctx.fillStyle='#0052FF18'; ctx.strokeStyle='#0052FF44'; ctx.lineWidth=1;
+    ctx.fillRect(W/2-112,ry,224,50); ctx.strokeRect(W/2-112,ry,224,50);
+    ctx.font='9px Courier New'; ctx.fillStyle='#ffffff55';
+    ctx.textAlign='left'; ctx.fillText(rows[ri].icon+' '+rows[ri].label, W/2-104, ry+14);
+    ctx.textAlign='right';
+    ctx.font='bold 20px Courier New'; ctx.fillStyle=rows[ri].color;
+    ctx.shadowColor=rows[ri].color; ctx.shadowBlur=8;
+    ctx.fillText(rows[ri].val, W/2+104, ry+38); ctx.shadowBlur=0;
+  }
+  ctx.textAlign='center';
+
+  // Global placeholder
+  ctx.fillStyle='#ffffff06'; ctx.strokeStyle='#0052FF22'; ctx.lineWidth=1;
+  ctx.fillRect(W/2-112,H/2+98,224,46); ctx.strokeRect(W/2-112,H/2+98,224,46);
+  ctx.font='10px Courier New'; ctx.fillStyle='#FFD70066';
+  ctx.fillText('🌐 RANKING GLOBAL', W/2, H/2+116);
+  ctx.font='9px Courier New'; ctx.fillStyle='#ffffff33';
+  ctx.fillText('em breve — conecte sua wallet', W/2, H/2+132);
+}
+
+// ─── DAILY LOGIN ────────────────────────────────────────────────────
+var dailyModal=false, dailyDay=1, dailyReward='coins', dailyRewardVal=50;
+function checkDailyLogin() {
+  var today = new Date().toDateString();
+  var dl = JSON.parse(localStorage.getItem('bleuDaily')||'{"date":"","streak":0}');
+  if(dl.date===today) return;
+  var yest = new Date(); yest.setDate(yest.getDate()-1);
+  var streak = dl.date===yest.toDateString() ? dl.streak+1 : 1;
+  localStorage.setItem('bleuDaily', JSON.stringify({date:today, streak:streak}));
+  dailyDay = ((streak-1)%7)+1;
+  if(dailyDay===2)      { dailyReward='chest'; dailyRewardVal=1; }
+  else if(dailyDay===3) { dailyReward='skin';  dailyRewardVal=0; }
+  else                  { dailyReward='coins'; dailyRewardVal=30+dailyDay*10; }
+  dailyModal=true;
+}
+function claimDailyReward() {
+  if(dailyReward==='coins') { coinCount+=dailyRewardVal; localStorage.setItem('bleuCoins',coinCount); }
+  else if(dailyReward==='chest') { /* trigger bonus chest after dismiss */ }
+  else if(dailyReward==='skin') {
+    var locked = SKINS.map(function(_,i){return i;}).filter(function(i){return unlockedSkins.indexOf(i)<0;});
+    if(locked.length>0){ var newSk=locked[Math.floor(Math.random()*locked.length)]; unlockedSkins.push(newSk); localStorage.setItem('bleuSkins',JSON.stringify(unlockedSkins)); }
+  }
+  dailyModal=false;
+}
+function drawDailyModal() {
+  ctx.fillStyle='rgba(0,5,20,.9)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.font='bold 18px Courier New';
+  var dg=ctx.createLinearGradient(W/2-80,0,W/2+80,0);
+  dg.addColorStop(0,'#FFD700'); dg.addColorStop(1,'#00D4FF');
+  ctx.fillStyle=dg; ctx.shadowColor='#FFD700'; ctx.shadowBlur=20;
+  ctx.fillText('LOGIN DIÁRIO', W/2, H/2-122); ctx.shadowBlur=0;
+  ctx.font='11px Courier New'; ctx.fillStyle='#ffffff66';
+  ctx.fillText('Dia '+dailyDay+' de 7', W/2, H/2-98);
+
+  // 7-day progress strip
+  var icons=['💰','📦','🎨','💰','💰','💰','🎁'];
+  for(var d=1;d<=7;d++){
+    var dw=34, dh=38, dgap=4;
+    var total7=7*dw+6*dgap, dx7=W/2-total7/2+(d-1)*(dw+dgap), dy7=H/2-72;
+    var done=d<dailyDay, today=(d===dailyDay);
+    ctx.fillStyle=done?'#0052FF44':today?'#0052FF22':'#ffffff08';
+    ctx.strokeStyle=today?'#FFD700':done?'#0052FF':'#ffffff22'; ctx.lineWidth=today?2:1;
+    ctx.fillRect(dx7,dy7,dw,dh); ctx.strokeRect(dx7,dy7,dw,dh);
+    ctx.font='16px Courier New'; ctx.fillStyle=done||today?'#FFD700':'#ffffff44';
+    ctx.fillText(icons[d-1], dx7+dw/2, dy7+22);
+    if(done){ ctx.font='8px Courier New'; ctx.fillStyle='#00D4FF88'; ctx.fillText('✓',dx7+dw/2,dy7+34); }
+  }
+
+  // Today's reward box
+  ctx.font='bold 13px Courier New'; ctx.fillStyle='#ffffff88';
+  ctx.fillText('Recompensa de hoje:', W/2, H/2+12);
+  ctx.font='bold 24px Courier New';
+  if(dailyReward==='coins'){
+    ctx.fillStyle='#FFD700'; ctx.shadowColor='#FFD700'; ctx.shadowBlur=18;
+    ctx.fillText('+'+dailyRewardVal+' moedas 🐉', W/2, H/2+48);
+  } else if(dailyReward==='chest'){
+    ctx.fillStyle='#C8960C'; ctx.shadowColor='#C8960C'; ctx.shadowBlur=18;
+    ctx.fillText('📦 Baú Grátis!', W/2, H/2+48);
+  } else {
+    ctx.fillStyle='#00D4FF'; ctx.shadowColor='#00D4FF'; ctx.shadowBlur=18;
+    ctx.fillText('🎨 Skin Especial!', W/2, H/2+48);
+  }
+  ctx.shadowBlur=0;
+
+  // Claim button
+  ctx.fillStyle='#0052FF'; ctx.strokeStyle='#00D4FF'; ctx.lineWidth=2;
+  ctx.fillRect(W/2-65,H/2+78,130,34); ctx.strokeRect(W/2-65,H/2+78,130,34);
+  ctx.font='bold 13px Courier New'; ctx.fillStyle='#fff';
+  ctx.shadowColor='#00D4FF'; ctx.shadowBlur=8;
+  ctx.fillText('COLETAR', W/2, H/2+100); ctx.shadowBlur=0;
+}
+
+// ─── SCORE POPUP ─────────────────────────────────────────────────────
+var scorePopups=[], scoreGlow=0;
+function spawnScorePopup(x,y,txt) {
+  if(scorePopups.length>5) return;
+  scorePopups.push({x:x, y:y, life:38, vy:-1.4, txt:txt||'+1'});
+}
+function updateScorePopups() {
+  scorePopups=scorePopups.filter(function(p){return p.life>0;});
+  for(var i=0;i<scorePopups.length;i++){
+    var p=scorePopups[i];
+    ctx.save(); ctx.globalAlpha=Math.min(1,p.life/20);
+    ctx.textAlign='center'; ctx.font='bold 14px Courier New';
+    ctx.fillStyle='#FFD700'; ctx.shadowColor='#FFD700'; ctx.shadowBlur=10;
+    ctx.fillText(p.txt||'+1', p.x, p.y); ctx.shadowBlur=0;
+    ctx.restore();
+    p.y+=p.vy; p.x+=(Math.random()-.5)*.4; p.life--;
+  }
+}
 // ─── HIGHSCORE ───────────────────────────────
 let highScore = parseInt(localStorage.getItem('bleuHS') || '0');
 let newRecord = false;
@@ -122,7 +604,19 @@ var showCharSel   = false; // show character selector in idle
 let bleu, pipes, score, frame, gameState, particles, lastGapCenter;
 let phaseFlash = 0, lastPhaseIdx = 0;
 let screenShake = 0, scorePop = 0, hitFlash = 0, bleuSquish = 0;
-let coins = [], coinCount = 0;
+let coins = [], coinCount = parseInt(localStorage.getItem('bleuCoins')||'0');
+var _mTimeout=null, _mPhase=-1, _mPos=0;
+var completedPhase=0, chestClicks=0, chestBounce=0, chestOpened=false, chestCoins=0, chestOpenAnim=0;
+var idleTab='play';
+var totalScore=parseInt(localStorage.getItem('bleuTotal')||'0');
+var shopOverlay=false, paused=false;
+var _bgGrad=null, _bgGradPhase=-1;
+var combo=0, comboFlash=0, comboBest=0, recFlash=0, coinsThisRun=0, milestoneIdx=0;
+var lastScore=0;
+const MILESTONES=[5,10,25,50,100];
+var activeSkin=parseInt(localStorage.getItem('bleuSkin')||'0');
+var unlockedSkins=JSON.parse(localStorage.getItem('bleuSkins')||'[0]');
+var chestType='normal';
 
 function resetGame() {
   bleu          = { x:90, y:H/2, vy:0, flap:0 };
@@ -138,6 +632,8 @@ function resetGame() {
   lastPhaseIdx  = 0;
   nftFlash      = 0;
   screenShake = 0; scorePop = 0; hitFlash = 0; bleuSquish = 0;
+  idleTab = 'play'; scorePopups = []; scoreGlow = 0; chestType = 'normal'; shopOverlay = false; paused = false;
+  combo = 0; comboFlash = 0; coinsThisRun = 0; milestoneIdx = 0; recFlash = 0;
 }
 resetGame();
 
@@ -154,14 +650,15 @@ function drawBleu(x, y, flapAnim, vy) {
   var ff = Math.sin(flapAnim * 3.1);
   var ef = Math.abs(Math.sin(flapAnim * 2.4));
 
-  var cBody    = '#3b8fff';
-  var cBodyLt  = '#6ab4ff';
-  var cBelly   = '#d6eeff';
-  var cShadow  = '#1a5fcc';
+  var sk = SKINS[activeSkin] || SKINS[0];
+  var cBody    = sk.body;
+  var cBodyLt  = sk.bodyLt;
+  var cBelly   = sk.belly;
+  var cShadow  = sk.shadow;
   var cBlush   = 'rgba(255,160,160,0.55)';
   var cEye     = '#ffffff';
   var cPupil   = '#111111';
-  var cOutline = '#1a4fa0';
+  var cOutline = sk.outline;
 
   ctx.lineJoin = 'round';
   ctx.lineCap  = 'round';
@@ -261,9 +758,11 @@ function drawBleu(x, y, flapAnim, vy) {
   // GLOW
   ctx.save();
   ctx.globalAlpha = 0.13 + ff * 0.05;
-  ctx.shadowColor = '#4499ff'; ctx.shadowBlur = 22;
+  var glowStr = scoreGlow>0 ? 0.3+scoreGlow/15*.4 : 0.13+ff*.05;
+  ctx.globalAlpha = glowStr;
+  ctx.shadowColor = sk.glow; ctx.shadowBlur = scoreGlow>0 ? 22+scoreGlow*1.5 : 0;
   ctx.beginPath(); ctx.arc(4, -10, 22, 0, Math.PI * 2);
-  ctx.fillStyle = '#4499ff'; ctx.fill();
+  ctx.fillStyle = sk.glow; ctx.fill();
   ctx.globalAlpha = 1;
   ctx.restore();
 
@@ -1816,54 +2315,37 @@ function drawSunnyBlueSkyBg() {
 }
 
 function drawGhostDungeonBg() {
-  // Hanging chains from ceiling
-  for(var ch = 0; ch < 6; ch++) {
-    var chx = 30 + ch * 65;
-    var chLen = 55 + (ch%3)*25;
-    ctx.strokeStyle = '#44336688'; ctx.lineWidth = 3;
-    ctx.beginPath();
-    for(var cl = 0; cl < chLen; cl += 8) {
-      if(cl === 0) ctx.moveTo(chx, 22);
-      else if((cl/8)%2 === 0) ctx.lineTo(chx - 4, 22 + cl);
-      else ctx.lineTo(chx + 4, 22 + cl);
-    }
+  // Chains — 3 only, single path each (no per-link arcs)
+  for(var ch=0;ch<3;ch++){
+    var chx=50+ch*150, chLen=60+(ch%2)*20;
+    ctx.strokeStyle='#44336677'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(chx,22);
+    for(var cl=8;cl<chLen;cl+=8) ctx.lineTo(chx+(cl/8%2===0?-3:3),22+cl);
     ctx.stroke();
-    // Chain links
-    ctx.strokeStyle = '#554477aa'; ctx.lineWidth = 2;
-    for(var cl2 = 0; cl2 < chLen; cl2 += 8) {
-      ctx.beginPath(); ctx.arc(chx + (cl2/8%2===0?-4:4), 22+cl2, 4, 0, Math.PI*2); ctx.stroke();
-    }
   }
-  // Floating ghosts with Base logo
-  var ghosts = [{ox:50,y:120},{ox:200,y:180},{ox:310,y:100},{ox:130,y:280},{ox:360,y:230}];
-  for(var gi = 0; gi < ghosts.length; gi++) {
-    var gx = ((ghosts[gi].ox - frame*0.18 + gi*40) % (W+100) + W+100) % (W+100) - 50;
-    var gy = ghosts[gi].y + Math.sin(frame*0.018 + gi*1.3) * 12;
-    ctx.globalAlpha = 0.22 + (gi%3)*0.06;
-    // Ghost body
-    ctx.fillStyle = '#ffffff';
+  // Floating ghosts (3, no shadowBlur)
+  var ghosts=[{ox:50,y:120},{ox:210,y:180},{ox:340,y:100}];
+  for(var gi=0;gi<ghosts.length;gi++){
+    var gx=((ghosts[gi].ox-frame*.18+gi*40)%(W+100)+W+100)%(W+100)-50;
+    var gy=ghosts[gi].y+Math.sin(frame*.018+gi*1.3)*12;
+    ctx.globalAlpha=0.22+(gi%2)*.07;
+    ctx.fillStyle='#ffffff';
     ctx.beginPath();
-    ctx.arc(gx, gy, 20, Math.PI, 0);
-    ctx.lineTo(gx+20, gy+24);
-    ctx.quadraticCurveTo(gx+14, gy+16, gx+7, gy+24);
-    ctx.quadraticCurveTo(gx, gy+16, gx-7, gy+24);
-    ctx.quadraticCurveTo(gx-14, gy+16, gx-20, gy+24);
+    ctx.arc(gx,gy,18,Math.PI,0);
+    ctx.lineTo(gx+18,gy+22);
+    ctx.quadraticCurveTo(gx+10,gy+14,gx,gy+22);
+    ctx.quadraticCurveTo(gx-10,gy+14,gx-18,gy+22);
     ctx.closePath(); ctx.fill();
-    // Eyes
-    ctx.fillStyle = '#220044';
-    ctx.beginPath(); ctx.ellipse(gx-7, gy-3, 4, 5, 0, 0, Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(gx+7, gy-3, 4, 5, 0, 0, Math.PI*2); ctx.fill();
-    // Neon Base "B" on ghost
-    ctx.shadowColor = '#0099ff'; ctx.shadowBlur = 14;
-    ctx.fillStyle = '#44ccff'; ctx.font = 'bold 13px Courier New'; ctx.textAlign = 'center';
-    ctx.fillText('Ƀ', gx, gy+16);
-    ctx.shadowBlur = 0;
-    ctx.globalAlpha = 1;
+    ctx.fillStyle='#220044';
+    ctx.beginPath(); ctx.ellipse(gx-6,gy-2,3,4,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(gx+6,gy-2,3,4,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#44ccff'; ctx.font='bold 12px Courier New'; ctx.textAlign='center';
+    ctx.fillText('Ƀ',gx,gy+14);
+    ctx.globalAlpha=1;
   }
-  // Eerie purple ground mist
-  var pmist = ctx.createLinearGradient(0, H-240, 0, H-80);
+  var pmist=ctx.createLinearGradient(0,H-200,0,H-80);
   pmist.addColorStop(0,'transparent'); pmist.addColorStop(1,'#33116622');
-  ctx.fillStyle = pmist; ctx.fillRect(0, H-240, W, 160);
+  ctx.fillStyle=pmist; ctx.fillRect(0,H-200,W,120);
 }
 
 function drawAsteroids() {
@@ -2160,17 +2642,16 @@ function drawBg() {
   var pv = getPhaseVisual();
   var pi = getPhaseIdx();
 
-  // Base gradient
-  var g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, pv.bg[0]); g.addColorStop(1, pv.bg[1]);
-  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // Base gradient — cached per phase
+  if(_bgGradPhase!==pi){ _bgGradPhase=pi; _bgGrad=ctx.createLinearGradient(0,0,0,H); _bgGrad.addColorStop(0,pv.bg[0]); _bgGrad.addColorStop(1,pv.bg[1]); }
+  ctx.fillStyle=_bgGrad; ctx.fillRect(0,0,W,H);
 
   // ── Phase-specific background elements ──
   if(pi === 0) {
     // PHASE 1 — PERPDEX TERMINAL: matrix grid + chart
     ctx.strokeStyle = '#00ff4109'; ctx.lineWidth = 0.5;
-    for(var gxi=0; gxi<W; gxi+=20){ ctx.beginPath(); ctx.moveTo(gxi,22); ctx.lineTo(gxi,H); ctx.stroke(); }
-    for(var gyi=22; gyi<H; gyi+=20){ ctx.beginPath(); ctx.moveTo(0,gyi); ctx.lineTo(W,gyi); ctx.stroke(); }
+    for(var gxi=0; gxi<W; gxi+=36){ ctx.beginPath(); ctx.moveTo(gxi,22); ctx.lineTo(gxi,H); ctx.stroke(); }
+    for(var gyi=22; gyi<H; gyi+=36){ ctx.beginPath(); ctx.moveTo(0,gyi); ctx.lineTo(W,gyi); ctx.stroke(); }
     ctx.strokeStyle = '#00ff4120'; ctx.lineWidth = 1.5;
     ctx.beginPath();
     for(var cx2=0; cx2<=W; cx2+=4) {
@@ -2196,8 +2677,7 @@ function drawBg() {
   } else if(pi === 2) {
     // PHASE 3 — TO THE MOON: mountains + snow
     drawMountainBackground();
-    drawClouds(0.2);
-    drawSnowflakes();
+    drawClouds(0.18);
 
   } else if(pi === 3) {
     // PHASE 4 — CRYPTO FOREST: pine trees + drizzle
@@ -2296,6 +2776,7 @@ function drawPhaseBanner() {
 // ─── PARTÍCULAS ──────────────────────────────
 function spawnParticles(x, y, color, n) {
   n = n || 14;
+  if(particles.length > 35) return;
   for(var i=0; i<n; i++)
     particles.push({x:x, y:y, vx:(Math.random()-.5)*7, vy:(Math.random()-.5)*7, life:50, color:color});
 }
@@ -2327,46 +2808,59 @@ function hitTest() {
 }
 
 // ─── LOOP PRINCIPAL ──────────────────────────
-function loop() {
+var _lastT=0;
+function loop(ts) {
   requestAnimationFrame(loop);
+  var dt = ts - _lastT;
+  if(dt < 14) return; // cap ~72fps max to save battery/CPU on 90/120Hz screens
+  _lastT = ts;
   frame++;
   drawBg();
   ctx.save();
   if(screenShake>0){ctx.translate((Math.random()-.5)*screenShake*2,(Math.random()-.5)*screenShake*.7);}
 
+  // ── DAILY MODAL ──
+  if(dailyModal){ drawDailyModal(); return; }
+
   // ── IDLE ──
   if(gameState === 'idle'){
-    drawCharacter(bleu.x, bleu.y + Math.sin(frame*.045)*8, frame*.22, 0);
-    ctx.textAlign = 'center';
-    ctx.font = 'bold 34px Courier New';
-    var tg = ctx.createLinearGradient(W/2-80, 0, W/2+80, 0);
-    tg.addColorStop(0,'#0052FF'); tg.addColorStop(0.5,'#00D4FF'); tg.addColorStop(1,'#FFD700');
-    ctx.fillStyle = tg;
-    ctx.shadowColor = '#0052FF'; ctx.shadowBlur = 28;
-    ctx.fillText('FLAPY BLEU', W/2, H/2-82);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = '#FFD700'; ctx.font = 'bold 11px Courier New';
-    ctx.shadowColor='#FFD700'; ctx.shadowBlur=8;
-    ctx.fillText('$BLEU  *  BASE NETWORK  *  TO THE MOON', W/2, H/2-56);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = '#ffffff88'; ctx.font = '13px Courier New';
-    ctx.fillText('tap / SPACE to fly', W/2, H/2-26);
-    ctx.fillStyle = '#ffffff44'; ctx.font = '10px Courier New';
-    ctx.fillText('dodge the candles  *  ride the charts', W/2, H/2-4);
-    if(highScore > 0){
-      ctx.fillStyle = '#FFD700'; ctx.font = 'bold 13px Courier New';
-      ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 12;
-      ctx.fillText('BEST: ' + highScore, W/2, H/2+46);
+    drawIdleTabs();
+    if(idleTab==='play'){
+      drawCharacter(bleu.x, bleu.y + Math.sin(frame*.045)*8, frame*.22, 0);
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 34px Courier New';
+      var tg = ctx.createLinearGradient(W/2-80, 0, W/2+80, 0);
+      tg.addColorStop(0,'#0052FF'); tg.addColorStop(0.5,'#00D4FF'); tg.addColorStop(1,'#FFD700');
+      ctx.fillStyle = tg; ctx.shadowColor = '#0052FF'; ctx.shadowBlur = 28;
+      ctx.fillText('FLAPY BLEU', W/2, H/2-82); ctx.shadowBlur = 0;
+      ctx.fillStyle = '#FFD700'; ctx.font = 'bold 11px Courier New';
+      ctx.shadowColor='#FFD700'; ctx.shadowBlur=8;
+      ctx.fillText('$BLEU  *  BASE NETWORK  *  TO THE MOON', W/2, H/2-56);
       ctx.shadowBlur = 0;
+      ctx.fillStyle = '#ffffff88'; ctx.font = '13px Courier New';
+      ctx.fillText('tap / SPACE to fly', W/2, H/2-26);
+      ctx.fillStyle = '#ffffff44'; ctx.font = '10px Courier New';
+      ctx.fillText('dodge the candles  *  ride the charts', W/2, H/2-4);
+      if(highScore > 0){
+        ctx.fillStyle = '#FFD700'; ctx.font = 'bold 13px Courier New';
+        ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 12;
+        ctx.fillText('BEST: ' + highScore, W/2, H/2+46); ctx.shadowBlur = 0;
+      }
+      drawCharSelect();
+      ctx.fillStyle = '#0052FF88'; ctx.font = '10px Courier New'; ctx.textAlign = 'center';
+      ctx.fillText('powered by Base Network', W/2, H-95);
+    } else if(idleTab==='shop'){
+      drawShopTab();
+    } else if(idleTab==='skins'){
+      drawSkinsTab();
+    } else if(idleTab==='leaderboard'){
+      drawLeaderboardTab();
     }
-    drawCharSelect();
-    ctx.fillStyle = '#0052FF88'; ctx.font = '10px Courier New'; ctx.textAlign = 'center';
-    ctx.fillText('powered by Base Network', W/2, H-95);
     return;
   }
 
   // ── PLAYING ──
-  if(gameState === 'playing'){
+  if(gameState === 'playing' && !shopOverlay && !paused){
     bleu.vy   += 0.38;
     bleu.y    += bleu.vy;
     bleu.flap += 0.25;
@@ -2387,16 +2881,36 @@ function loop() {
       var p = pipes[i];
       p.x -= spd;
       if(!p.passed && p.x+p.bodyW < bleu.x){
-        p.passed = true; score++; scorePop = 12;
-        beep(523, 1047, 0.22, 'sine', 0.14);
-        spawnParticles(bleu.x, bleu.y, '#FFD700', 10);
-        spawnParticles(bleu.x, bleu.y, pv.glowColor, 6);
+        p.passed = true; score++; scorePop = 12; scoreGlow = 14;
+        combo++; comboFlash=22; coinsThisRun++;
+        if(navigator.vibrate) navigator.vibrate(10);
+        // escalating pitch with combo
+        var pitch = Math.min(260 + score*14, 900);
+        beep(pitch, pitch*2, 0.18, 'sine', 0.13);
+        if(combo===3){ beep(pitch*1.5, pitch*3, 0.14, 'sine', 0.08); screenShake=4; }
+        if(combo===5){ beep(880, 1760, 0.22, 'square', 0.08); screenShake=6; spawnScorePopup(bleu.x,bleu.y-55,'🔥 FEVER!'); }
+        if(combo===10){ beep(1047, 2093, 0.28, 'square', 0.1); screenShake=8; spawnScorePopup(bleu.x,bleu.y-55,'💎 x10 ULTRA!'); }
+        spawnScorePopup(bleu.x, bleu.y-25);
+        // milestone bonus
+        if(MILESTONES[milestoneIdx] && score>=MILESTONES[milestoneIdx]){
+          var bonus = MILESTONES[milestoneIdx]*2;
+          coinCount+=bonus; localStorage.setItem('bleuCoins',coinCount);
+          spawnScorePopup(bleu.x, bleu.y-55, '+'+bonus+' 🐉 BÔNUS!');
+          beep(880,1760,0.35,'sine',0.18);
+          screenShake=8;
+          milestoneIdx++;
+          if(navigator.vibrate) navigator.vibrate([50,20,50,20,80]);
+        }
+        // record mid-game flash
+        if(score>highScore && !newRecord) recFlash=55;
 
         // phase change detection
         var newPI = getPhaseIdx();
         if(newPI > lastPhaseIdx) {
+          _bgGradPhase=-1; completedPhase = lastPhaseIdx;
           lastPhaseIdx = newPI;
           phaseFlash   = 150;
+          startMusic(newPI);
           spawnParticles(W/2, H/2, '#FFD700', 30);
           spawnParticles(W/2, H/2, '#00D4FF', 20);
           var fs = [440,554,659,880];
@@ -2412,6 +2926,7 @@ function loop() {
               setTimeout(function(){ beep(f,f*1.2,0.25,'sine',0.2); }, ii*100);
             });
           }
+          if(newPI%2===0||newPI===9){ chestType=(newPI===9)?'rare':'normal'; gameState='award'; chestClicks=0;chestBounce=0;chestOpened=false;chestCoins=0;chestOpenAnim=0;bleu.vy=0; }
         }
       }
     }
@@ -2432,7 +2947,8 @@ function loop() {
         var dx3 = bleu.x - coin.x, dy3 = bleu.y - coin.y;
         if(Math.sqrt(dx3*dx3 + dy3*dy3) < 23) {
           coin.collected = true;
-          coinCount++;
+          coinCount++; coinsThisRun++;
+          localStorage.setItem('bleuCoins',coinCount);
           spawnParticles(coin.x, coin.y, '#88ccff', 8);
           spawnParticles(coin.x, coin.y, '#ffffff', 4);
           beep(880, 1320, 0.12, 'sine', 0.1);
@@ -2446,10 +2962,12 @@ function loop() {
 
     for(var i=0; i<pipes.length; i++) drawObstacle(pipes[i]);
     ctx.save();
+    if(scoreGlow>0) scoreGlow--;
     if(bleuSquish>0){var _sq=bleuSquish/8;ctx.translate(bleu.x,bleu.y);ctx.scale(1+_sq*.2,1-_sq*.18);ctx.translate(-bleu.x,-bleu.y);bleuSquish--;}
     drawCharacter(bleu.x, bleu.y, bleu.flap, bleu.vy);
     ctx.restore();
     updateParticles();
+    updateScorePopups();
     drawPhaseBanner();
     drawNFTBanner();
 
@@ -2458,11 +2976,16 @@ function loop() {
     var _ps = scorePop>0 ? 1+(scorePop/12)*0.6 : 1;
     ctx.save(); ctx.translate(W/2,52); ctx.scale(_ps,_ps);
     ctx.font = 'bold 26px Courier New';
-    ctx.shadowColor = pv.glowColor; ctx.shadowBlur = 14+scorePop*2;
+    ctx.shadowColor = pv.glowColor; ctx.shadowBlur = scorePop>0 ? 14+scorePop*2 : 0;
     ctx.fillStyle = pv.glowColor;
     ctx.fillText(score, 0, 0);
     ctx.restore(); ctx.shadowBlur = 0;
     if(scorePop>0) scorePop--;
+    // Pause button
+    ctx.fillStyle='#ffffff18'; ctx.strokeStyle='#ffffff33'; ctx.lineWidth=1;
+    ctx.fillRect(W-36,6,26,20); ctx.strokeRect(W-36,6,26,20);
+    ctx.fillStyle='#ffffffaa'; ctx.font='bold 10px Courier New'; ctx.textAlign='left';
+    ctx.fillText(paused?'▶':'II',W-30,20);
     // HUD — coin counter (top right)
     drawCoin(W - 38, 34);
     ctx.shadowColor = '#88ccff'; ctx.shadowBlur = 6;
@@ -2483,8 +3006,46 @@ function loop() {
       ctx.fillStyle = '#ffffff44'; ctx.font = '10px Courier New';
       ctx.fillText('best ' + highScore, W/2, 68);
     }
+    // combo HUD
+    if(comboFlash > 0){
+      var ca = Math.min(1, comboFlash/12);
+      var cscale = 1 + (comboFlash>18 ? (comboFlash-18)*0.04 : 0);
+      ctx.save();
+      ctx.globalAlpha = ca;
+      ctx.translate(W/2, 84);
+      ctx.scale(cscale, cscale);
+      ctx.textAlign = 'center';
+      if(combo>=5){
+        ctx.fillStyle = '#ff4488'; ctx.font = 'bold 16px Courier New';
+        ctx.shadowColor = '#ff0088'; ctx.shadowBlur = 18;
+      } else if(combo>=3){
+        ctx.fillStyle = '#FFD700'; ctx.font = 'bold 14px Courier New';
+        ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 12;
+      } else {
+        ctx.fillStyle = '#00D4FF'; ctx.font = 'bold 12px Courier New';
+        ctx.shadowBlur = 0;
+      }
+      ctx.fillText((combo>=5?'🔥 ':combo>=3?'⚡ ':'x')+combo+(combo>=5?' FEVER!':combo>=3?' COMBO!':''), 0, 0);
+      ctx.shadowBlur = 0;
+      ctx.restore();
+      comboFlash--;
+    } else { comboFlash=0; }
+    // recFlash — mid-game "NOVO RECORDE!" 
+    if(recFlash > 0){
+      var ra = Math.min(1, recFlash/18) * (recFlash>8?1:recFlash/8);
+      ctx.save();
+      ctx.globalAlpha = ra;
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 13px Courier New';
+      ctx.fillStyle = '#FFD700';
+      ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 20;
+      ctx.fillText('🏆 NOVO RECORDE!', W/2, H/2-70);
+      ctx.shadowBlur = 0;
+      ctx.restore();
+      recFlash--;
+    }
 
-    if(hitTest()){
+    if(gameState==='playing' && hitTest()){
       spawnParticles(bleu.x, bleu.y, '#FF1744', 20);
       spawnParticles(bleu.x, bleu.y, '#FFD700', 10);
       beep(350, 60, 0.5, 'sawtooth', 0.25);
@@ -2495,10 +3056,20 @@ function loop() {
           setTimeout(function(){ beep(f,f,0.15,'sine',0.14); }, i*85);
         });
       }
-      gameState = 'dead'; screenShake = 14; hitFlash = 8;
+      lastScore=score; totalScore+=score; localStorage.setItem('bleuTotal',totalScore); gameState='dead'; screenShake=14; hitFlash=8; stopMusic();
+      if(comboBest<combo) comboBest=combo;
+      combo=0; comboFlash=0; milestoneIdx=0;
+      if(navigator.vibrate) navigator.vibrate([80,30,80]);
     }
   }
 
+  // ── AWARD ──
+  if(gameState === 'award'){
+    for(var i=0;i<pipes.length;i++) drawObstacle(pipes[i]);
+    drawCharacter(bleu.x, bleu.y, bleu.flap, 0);
+    updateParticles();
+    drawAwardScreen();
+  }
   // ── DEAD ──
   if(gameState === 'dead'){
     for(var i=0; i<pipes.length; i++) drawObstacle(pipes[i]);
@@ -2511,61 +3082,205 @@ function loop() {
       ctx.fillText('NEW RECORD!', W/2, H/2-92);
       ctx.shadowBlur = 0;
     }
-    ctx.font = 'bold 30px Courier New';
-    ctx.shadowColor = '#FF1744'; ctx.shadowBlur = 24;
+    // dark panel
+    ctx.fillStyle = 'rgba(0,5,20,0.72)';
+    ctx.beginPath(); ctx.roundRect(W/2-110,H/2-80,220,200,14); ctx.fill();
+    // REKT title
+    ctx.font = 'bold 32px Courier New';
+    ctx.shadowColor = '#FF1744'; ctx.shadowBlur = 28;
     ctx.fillStyle = '#FF1744';
-    ctx.fillText('REKT', W/2, H/2-50);
+    ctx.fillText('REKT', W/2, H/2-42);
     ctx.shadowBlur = 0;
-    ctx.fillStyle = '#fff'; ctx.font = '20px Courier New';
-    ctx.fillText('Score: ' + score, W/2, H/2-10);
-    ctx.fillStyle = '#00D4FF'; ctx.font = 'bold 12px Courier New';
-    ctx.fillText(getPhase().label + ' reached', W/2, H/2+12);
-    ctx.fillStyle = '#FFD700'; ctx.font = 'bold 14px Courier New';
-    ctx.shadowColor = '#FFD70066'; ctx.shadowBlur = 10;
-    ctx.fillText('Best: ' + highScore, W/2, H/2+32);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = '#0052FF99'; ctx.font = '13px Courier New';
-    ctx.fillText('tap / SPACE to retry', W/2, H/2+56);
-    ctx.fillStyle = '#FFD700'; ctx.font = '11px Courier New';
-    ctx.fillText('$BLEU never stops', W/2, H/2+74);
+    // score row
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 22px Courier New';
+    ctx.fillText('Score: ' + score, W/2, H/2-8);
+    // combo best
+    if(comboBest >= 2){
+      ctx.fillStyle = comboBest>=5?'#ff4488':comboBest>=3?'#FFD700':'#00D4FF';
+      ctx.font = 'bold 12px Courier New';
+      ctx.fillText('Melhor combo: x' + comboBest, W/2, H/2+12);
+    }
+    // coins this run
+    if(coinsThisRun > 0){
+      ctx.fillStyle = '#FFD700'; ctx.font = '12px Courier New';
+      ctx.shadowColor = '#FFD70066'; ctx.shadowBlur = 8;
+      ctx.fillText('🐉 +' + coinsThisRun + ' moedas', W/2, H/2+28);
+      ctx.shadowBlur = 0;
+    }
+    // best
+    if(newRecord){
+      ctx.fillStyle = '#FFD700'; ctx.font = 'bold 13px Courier New';
+      ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 16;
+      ctx.fillText('🏆 NOVO RECORDE: ' + highScore, W/2, H/2+46);
+      ctx.shadowBlur = 0;
+    } else {
+      ctx.fillStyle = '#FFD70088'; ctx.font = '12px Courier New';
+      ctx.fillText('Best: ' + highScore, W/2, H/2+46);
+    }
+    // big retry button
+    var pulse = 0.97 + 0.03*Math.sin(frame*0.12);
+    ctx.save();
+    ctx.translate(W/2, H/2+84);
+    ctx.scale(pulse, pulse);
+    ctx.fillStyle = '#0052FF';
+    ctx.beginPath(); ctx.roundRect(-80,-18,160,36,10); ctx.fill();
+    ctx.font = 'bold 15px Courier New';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('▶ JOGAR DE NOVO', 0, 0);
+    ctx.textBaseline = 'alphabetic';
+    ctx.restore();
+    // menu button
+    ctx.fillStyle = '#ffffff0a';
+    ctx.beginPath(); ctx.roundRect(W/2-55, H/2+108, 110, 28, 8); ctx.fill();
+    ctx.strokeStyle = '#0052FF44'; ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.font = '12px Courier New'; ctx.fillStyle = '#0052FFcc';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('⌂  MENU', W/2, H/2+122);
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#ffffff22'; ctx.font = '9px Courier New';
+    ctx.fillText('$BLEU never stops', W/2, H/2+150);
   }
   ctx.restore();
   if(screenShake>0)screenShake--;
+  if(shopOverlay){ drawShopOverlay(); }
+  if(paused && gameState==='playing'){ ctx.fillStyle='rgba(0,5,20,.65)'; ctx.fillRect(0,0,W,H); ctx.textAlign='center'; ctx.font='bold 22px Courier New'; ctx.fillStyle='#fff'; ctx.shadowColor='#0052FF'; ctx.shadowBlur=20; ctx.fillText('PAUSADO',W/2,H/2); ctx.shadowBlur=0; ctx.font='11px Courier New'; ctx.fillStyle='#ffffff88'; ctx.fillText('toque ▶ ou tecle P para continuar',W/2,H/2+28); }
   if(hitFlash>0){ctx.globalAlpha=(hitFlash/8)*.38;ctx.fillStyle='#ff1133';ctx.fillRect(0,0,W,H);ctx.globalAlpha=1;hitFlash--;}
 }
 
 // ─── INPUT ───────────────────────────────────
 function flap() {
-  if(gameState==='idle')         { gameState='playing'; }
+  if(gameState==='idle')         { gameState='playing'; startMusic(getPhaseIdx()); combo=0; comboFlash=0; coinsThisRun=0; milestoneIdx=0; recFlash=0; }
   else if(gameState==='playing') { bleu.vy=-7.5; bleu.flap=-1; bleuSquish=8; beep(260,520,0.09,'sine',0.16); }
   else if(gameState==='dead')    { resetGame(); gameState='playing'; }
 }
 
+
+function hitShopCard(cx, cy, yStart, compact) {
+  var cols=3, tw=76, th=compact?82:80, gapX=8, gapY=compact?4:5;
+  var startX=W/2-((cols*(tw+gapX)-gapX)/2);
+  for(var si=1;si<SKINS.length;si++){
+    var idx2=si-1, col=idx2%cols, row=Math.floor(idx2/cols);
+    var sx=startX+col*(tw+gapX)+tw/2, sy=yStart+row*(th+gapY);
+    if(cx>=sx-tw/2&&cx<=sx+tw/2&&cy>=sy&&cy<=sy+th) return si;
+  }
+  return -1;
+}
+function buySkin(si) {
+  var sk=SKINS[si], owned=unlockedSkins.indexOf(si)>=0;
+  if(owned){ activeSkin=si; localStorage.setItem('bleuSkin',''+si); beep(440+si*50,880+si*50,0.1,'sine',0.12); }
+  else if(coinCount>=sk.price){
+    coinCount-=sk.price; localStorage.setItem('bleuCoins',coinCount);
+    unlockedSkins.push(si); localStorage.setItem('bleuSkins',JSON.stringify(unlockedSkins));
+    activeSkin=si; localStorage.setItem('bleuSkin',''+si);
+    beep(523,1047,0.3,'sine',0.15);
+    [659,784,1047].forEach(function(f,ii){setTimeout(function(){beep(f,f,0.12,'sine',0.1);},ii*70);});
+  } else { beep(220,150,0.12,'sawtooth',0.08); hitFlash=3; }
+}
 function handleClick(ex, ey) {
-  // Character select buttons in idle screen
-  if(gameState === 'idle' && unlockedChars >= 2) {
-    var bx1 = W/2 - 55, bx2 = W/2 + 15, by = H/2+80, bw = 40, bh = 16;
-    // Need canvas-relative coords
-    var rect = canvas.getBoundingClientRect();
-    var scaleX = W / rect.width, scaleY = H / rect.height;
-    var cx2 = (ex - rect.left) * scaleX;
-    var cy2 = (ey - rect.top)  * scaleY;
-    if(cx2>=bx1 && cx2<=bx1+bw && cy2>=by && cy2<=by+bh) {
-      activeChar = 0; localStorage.setItem('bleuActiveChar','0');
-      beep(440,880,0.1,'sine',0.12); return;
+  var rect = canvas.getBoundingClientRect();
+  var scaleX = W/rect.width, scaleY = H/rect.height;
+  var cx = (ex-rect.left)*scaleX, cy = (ey-rect.top)*scaleY;
+  if(dailyModal){
+    if(cx>=W/2-65&&cx<=W/2+65&&cy>=H/2+78&&cy<=H/2+112){ claimDailyReward(); beep(523,1047,0.2,'sine',0.14); }
+    return;
+  }
+  if(shopOverlay){
+    if(cy>=H-74&&cy<=H-38&&cx>=W/2-80&&cx<=W/2+80){ shopOverlay=false; return; }
+    var si2=hitShopCard(cx,cy,76,true);
+    if(si2>=0){ buySkin(si2); return; }
+    return;
+  }
+
+  // ── AWARD chest click
+  if(gameState === 'award') {
+    if(!chestOpened) {
+      chestClicks++;
+      chestBounce = 12;
+      beep(440+chestClicks*110, 880+chestClicks*110, 0.12, 'sine', 0.12);
+      if(chestClicks >= 3) {
+        chestOpened = true;
+        chestCoins = chestCoinsRand();
+        coinCount += chestCoins;
+        localStorage.setItem('bleuCoins', coinCount);
+        beep(523,1047,0.3,'sine',0.15);
+        [659,784,1047,1319].forEach(function(f,i){
+          setTimeout(function(){beep(f,f,0.15,'sine',0.12);},i*80);
+        });
+      }
+    } else if(chestOpenAnim >= 14) {
+      shopOverlay = true; gameState = 'playing'; startMusic(getPhaseIdx());
     }
-    if(cx2>=bx2 && cx2<=bx2+bw && cy2>=by && cy2<=by+bh) {
-      activeChar = 1; localStorage.setItem('bleuActiveChar','1');
-      beep(660,1320,0.1,'sine',0.12); return;
+    return;
+  }
+
+  // ── DEAD screen buttons
+  if(gameState === 'dead') {
+    // Menu button: W/2-55 to W/2+55, H/2+108 to H/2+136
+    if(cx>=W/2-55&&cx<=W/2+55&&cy>=H/2+108&&cy<=H/2+136){
+      resetGame(); idleTab='play'; return;
+    }
+    // Retry — anywhere else on dead screen
+    flap(); return;
+  }
+
+  // ── IDLE tabs click
+  if(gameState === 'idle') {
+    if(idleTab==='shop'){ var si3=hitShopCard(cx,cy,76,false); if(si3>=0){ buySkin(si3); return; } }
+    var labels=['play','shop','skins','leaderboard'], tw=70, th=26, gap=6;
+    var total=4*(tw+gap)-gap, tx0=W/2-total/2, ty=H-72;
+    for(var ti=0;ti<labels.length;ti++) {
+      var tx=tx0+ti*(tw+gap);
+      if(cx>=tx&&cx<=tx+tw&&cy>=ty&&cy<=ty+th) {
+        idleTab=labels[ti]; beep(440,660,0.08,'sine',0.1); return;
+      }
+    }
+    // Skins tab: click to equip (only owned skins shown)
+    if(idleTab==='skins') {
+      var owned2=unlockedSkins.slice().sort(function(a,b){return a-b;});
+      if(owned2.length===0) owned2=[0];
+      var cols2=3,tw3=78,th3=92,gapX2=8,totalW3=cols2*(tw3+gapX2)-gapX2,startX2=W/2-totalW3/2;
+      for(var ii2=0;ii2<owned2.length;ii2++) {
+        var si2=owned2[ii2];
+        var col2=ii2%cols2,row2=Math.floor(ii2/cols2);
+        var sx2=startX2+col2*(tw3+gapX2)+tw3/2, sy2=H/2-100+row2*(th3+gapX2);
+        if(cx>=sx2-tw3/2&&cx<=sx2+tw3/2&&cy>=sy2&&cy<=sy2+th3) {
+          activeSkin=si2;
+          localStorage.setItem('bleuSkin',''+si2);
+          beep(440+si2*55, 880+si2*55, 0.1,'sine',0.12);
+          return;
+        }
+      }
+    }
+// Character select (legacy, play tab)
+    if(idleTab==='play' && unlockedChars >= 2) {
+      var bx1=W/2-55, bx2=W/2+15, bby=H/2+80, bbw=40, bbh=16;
+      if(cx>=bx1&&cx<=bx1+bbw&&cy>=bby&&cy<=bby+bbh){ activeChar=0; localStorage.setItem('bleuActiveChar','0'); beep(440,880,0.1,'sine',0.12); return; }
+      if(cx>=bx2&&cx<=bx2+bbw&&cy>=bby&&cy<=bby+bbh){ activeChar=1; localStorage.setItem('bleuActiveChar','1'); beep(660,1320,0.1,'sine',0.12); return; }
     }
   }
+
+  // Pause button hit (top-right corner, playing state)
+  if(gameState==='playing' && cx>=W-36&&cx<=W-10&&cy>=6&&cy<=26){ paused=!paused; return; }
+  if(paused) return;
   flap();
 }
 
 canvas.addEventListener('click', function(e){ handleClick(e.clientX, e.clientY); });
-document.addEventListener('keydown', function(e){ if(e.code==='Space'){ e.preventDefault(); flap(); } });
+document.addEventListener('keydown', function(e){
+  if(e.code==='Space'){
+    e.preventDefault();
+    if(gameState==='award'){ handleClick(canvas.getBoundingClientRect().left + W/2, canvas.getBoundingClientRect().top + H/2); return; }
+    if(paused){ paused=false; return; }
+    if(shopOverlay){ shopOverlay=false; gameState='playing'; startMusic(getPhaseIdx()); return; }
+    flap();
+  }
+  if(e.code==='KeyP' && (gameState==='playing'||paused)){ paused=!paused; }
+});
 canvas.addEventListener('touchstart', function(e){ e.preventDefault(); handleClick(e.touches[0].clientX, e.touches[0].clientY); }, {passive:false});
 
+checkDailyLogin();
 loop();
 </script>
 </body>
