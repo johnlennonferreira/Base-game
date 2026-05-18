@@ -15,7 +15,9 @@
       "PowerShell($env:PATH -split ';' | Where-Object { $_ -ne '' })",
       "mcp__Claude_Preview__preview_start",
       "Bash(Select-String -Path \"C:\\\\Users\\\\carij\\\\OneDrive\\\\Área de Trabalho\\\\Game-Base\\\\index.html\" -Pattern \"drawCharacter|drawBrett|nftFlash\")",
-      "Bash(Select-Object LineNumber, Line)"
+      "Bash(Select-Object LineNumber, Line)",
+      "Bash(node --input-type=module)",
+      "Bash(node -e ' *)"
     ]
   }
 }
